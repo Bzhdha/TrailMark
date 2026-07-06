@@ -192,18 +192,28 @@ select option{background:var(--bg2)}
 
 <script>
 // ─── State ───────────────────────────────────────────────────────────────────
-let trails=JSON.parse(localStorage.getItem('tm_trails')||'[]');
+let trails=sanitizeTrails(JSON.parse(localStorage.getItem('tm_trails')||'[]'));
 let pendingRef=null,pendingTrack=null,currentTrailId=null,leafMap=null;
 
 // ─── GPX Parser ──────────────────────────────────────────────────────────────
+// Returns segs: array of point-arrays. Splitting on <trkseg> keeps GPS pauses
+// (e.g. a lunch break) from being drawn as a straight line across the gap.
 function parseGPX(xml){
   const doc=new DOMParser().parseFromString(xml,'text/xml');
-  const pts=[...doc.querySelectorAll('trkpt,rtept,wpt')].map(p=>({
-    lat:+p.getAttribute('lat'),lng:+p.getAttribute('lon')
-  }));
+  const toPt=p=>({lat:+p.getAttribute('lat'),lng:+p.getAttribute('lon')});
+  const valid=p=>Number.isFinite(p.lat)&&Number.isFinite(p.lng);
+  const trkSegs=[...doc.querySelectorAll('trkseg')];
+  let segs;
+  if(trkSegs.length){
+    segs=trkSegs.map(seg=>[...seg.querySelectorAll('trkpt')].map(toPt).filter(valid));
+  } else {
+    const pts=[...doc.querySelectorAll('trkpt,rtept,wpt')].map(toPt).filter(valid);
+    segs=pts.length?[pts]:[];
+  }
+  segs=segs.filter(s=>s.length);
   const timeEl=doc.querySelector('metadata > time')||doc.querySelector('trkpt > time,rtept > time,wpt > time');
   const date=timeEl?new Date(timeEl.textContent).toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'}):null;
-  return {pts,date};
+  return {segs,date};
 }
 
 // ─── Geo Utils ───────────────────────────────────────────────────────────────
@@ -213,15 +223,16 @@ function haversine(a,b){
   const s=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
   return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));
 }
-function totalDist(pts){
-  let d=0;for(let i=1;i<pts.length;i++)d+=haversine(pts[i-1],pts[i]);
+function totalDist(segs){
+  let d=0;
+  for(const seg of segs)for(let i=1;i<seg.length;i++)d+=haversine(seg[i-1],seg[i]);
   return d;
 }
 
 // ─── Spatial Grid Dedup (20m) ─────────────────────────────────────────────────
 const CELL=20; // metres
 // Densify a polyline so no segment exceeds `step` metres
-function interpolate(pts,step=15){
+function interpolateSeg(pts,step=15){
   if(pts.length<2)return pts;
   const out=[pts[0]];
   for(let i=1;i<pts.length;i++){
@@ -238,38 +249,67 @@ function interpolate(pts,step=15){
   }
   return out;
 }
+function interpolate(segs,step=15){return segs.map(seg=>interpolateSeg(seg,step))}
 function latLng2cell(lat,lng){
   const cy=Math.floor(lat*R*Math.PI/180/CELL);
   const cx=Math.floor(lng*R*Math.PI/180*Math.cos(lat*Math.PI/180)/CELL);
   return `${cx},${cy}`;
 }
-function dedupDistance(trackPts,refPts){
+function dedupDistance(trackSegs,refSegs){
   const refCells=new Set();
-  for(const p of refPts){
+  for(const seg of refSegs)for(const p of seg){
     const [bx,by]=latLng2cell(p.lat,p.lng).split(',').map(Number);
     for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)refCells.add(`${bx+dx},${by+dy}`);
   }
   const visited=new Set();
-  for(const p of trackPts){
+  for(const seg of trackSegs)for(const p of seg){
     const k=latLng2cell(p.lat,p.lng);
     if(refCells.has(k))visited.add(k);
   }
   let d=0;
-  for(let i=1;i<refPts.length;i++){
-    const ka=latLng2cell(refPts[i-1].lat,refPts[i-1].lng);
-    const kb=latLng2cell(refPts[i].lat,refPts[i].lng);
-    if(visited.has(ka)||visited.has(kb))d+=haversine(refPts[i-1],refPts[i]);
+  for(const seg of refSegs){
+    for(let i=1;i<seg.length;i++){
+      const ka=latLng2cell(seg[i-1].lat,seg[i-1].lng);
+      const kb=latLng2cell(seg[i].lat,seg[i].lng);
+      if(visited.has(ka)||visited.has(kb))d+=haversine(seg[i-1],seg[i]);
+    }
   }
   return d;
 }
 function computeCoverage(trail){
-  const refPts=trail.refPts;
-  // Merge all track points
-  const allTrackPts=trail.tracks.flatMap(t=>t.pts);
-  if(!allTrackPts.length)return 0;
-  const covered=dedupDistance(allTrackPts,refPts);
-  const total=totalDist(refPts);
+  const refSegs=trail.refPts;
+  // Merge all track segments
+  const allTrackSegs=trail.tracks.flatMap(t=>t.pts);
+  if(!allTrackSegs.length)return 0;
+  const covered=dedupDistance(allTrackSegs,refSegs);
+  const total=totalDist(refSegs);
   return total>0?Math.min(100,covered/total*100):0;
+}
+
+// ─── Data validation ────────────────────────────────────────────────────────
+function isValidPt(p){return p&&typeof p==='object'&&Number.isFinite(p.lat)&&Number.isFinite(p.lng)}
+// Accepts either the old flat point-array format or the new segmented format
+// and always returns segments, dropping anything malformed.
+function normalizeSegs(pts){
+  if(!Array.isArray(pts)||!pts.length)return [];
+  const segs=Array.isArray(pts[0])?pts:[pts];
+  return segs.filter(Array.isArray).map(seg=>seg.filter(isValidPt)).filter(seg=>seg.length);
+}
+function sanitizeTrails(arr){
+  if(!Array.isArray(arr))return [];
+  return arr.filter(t=>t&&typeof t==='object'&&typeof t.name==='string').map(t=>{
+    const safeId=(typeof t.id==='string'&&/^[\w-]+$/.test(t.id))?t.id:(typeof t.id==='number'?String(t.id):null);
+    const tracks=Array.isArray(t.tracks)?t.tracks.filter(tr=>tr&&typeof tr==='object').map(tr=>({
+      pts:normalizeSegs(tr.pts),date:typeof tr.date==='string'?tr.date:null
+    })):[];
+    return {
+      id:safeId||(Date.now().toString(36)+Math.random().toString(36).slice(2)),
+      name:t.name.trim()||'Sentier',
+      emoji:typeof t.emoji==='string'?t.emoji.slice(0,2):'',
+      refPts:normalizeSegs(t.refPts),
+      tracks
+    };
+  }).filter(t=>t.refPts.flat().length>=2);
 }
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
@@ -288,15 +328,18 @@ function importData(inp){
   r.onload=e=>{
     try{
       const d=JSON.parse(e.target.result);
-      if(!d.trails||!Array.isArray(d.trails))throw new Error();
-      if(!confirm(`Importer ${d.trails.length} sentier(s) ? Les données actuelles seront remplacées.`))return;
-      trails=d.trails;save();renderTrails();showPage('trails');toast(`${trails.length} sentier(s) importé(s) ✓`);
+      if(!d||!Array.isArray(d.trails))throw new Error();
+      const sane=sanitizeTrails(d.trails);
+      if(!sane.length)throw new Error();
+      if(!confirm(`Importer ${sane.length} sentier(s) ? Les données actuelles seront remplacées.`))return;
+      trails=sane;save();renderTrails();showPage('trails');toast(`${trails.length} sentier(s) importé(s) ✓`);
     }catch{toast('Fichier invalide');}
   };
   r.readAsText(f);inp.value='';
 }
 
 // ─── UI Utils ─────────────────────────────────────────────────────────────────
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200)}
 function showPage(p){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById('page-'+p).classList.add('active');document.querySelectorAll('nav button').forEach((b,i)=>b.classList.toggle('active',i===(p==='trails'?0:1)))}
 function fmt(m){return m>=1000?(m/1000).toFixed(1)+'km':Math.round(m)+'m'}
@@ -313,8 +356,8 @@ function renderTrails(){
     const pct=computeCoverage(t),dist=totalDist(t.refPts),cov=dist*pct/100;
     return`<div class="trail-card" onclick="openTrail('${t.id}')">
       <div class="trail-card-header">
-        <div class="trail-icon">${t.emoji||'🥾'}</div>
-        <div><div class="trail-name">${t.name}</div><div class="trail-meta">${fmt(dist)} total · ${t.tracks.length} sortie${t.tracks.length>1?'s':''}</div></div>
+        <div class="trail-icon">${esc(t.emoji||'🥾')}</div>
+        <div><div class="trail-name">${esc(t.name)}</div><div class="trail-meta">${fmt(dist)} total · ${t.tracks.length} sortie${t.tracks.length>1?'s':''}</div></div>
         ${progressRing(pct)}
       </div>
       <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
@@ -342,21 +385,21 @@ function openTrail(id){
       <div class="stat"><div class="stat-val">${Math.round(pct)}%</div><div class="stat-lbl">Complété</div></div>
     </div>`;
   document.getElementById('modal-tracks').innerHTML=`<p class="section-title">Sorties (${t.tracks.length})</p><div class="track-list">${
-    t.tracks.map((tr,i)=>`<div class="track-item"><div class="dot" style="width:10px;height:10px;border-radius:50%;background:${COLORS[i%COLORS.length]};flex-shrink:0"></div>${tr.date||'Sortie '+(i+1)} · ${fmt(totalDist(tr.pts))}<button class="del" onclick="delTrack('${id}',${i})">✕</button></div>`).join('')
+    t.tracks.map((tr,i)=>`<div class="track-item"><div class="dot" style="width:10px;height:10px;border-radius:50%;background:${COLORS[i%COLORS.length]};flex-shrink:0"></div>${esc(tr.date||'Sortie '+(i+1))} · ${fmt(totalDist(tr.pts))}<button class="del" onclick="delTrack('${id}',${i})">✕</button></div>`).join('')
   }</div>`;
   setTimeout(()=>initMap(t),100);
 }
-function buildVisitedCells(trackPts){
+function buildVisitedCells(trackSegs){
   const visited=new Set();
-  for(const p of trackPts){
+  for(const seg of trackSegs)for(const p of seg){
     const [bx,by]=latLng2cell(p.lat,p.lng).split(',').map(Number);
     for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)visited.add(`${bx+dx},${by+dy}`);
   }
   return visited;
 }
-function buildRefCells(refPts){
+function buildRefCells(refSegs){
   const cells=new Set();
-  for(const p of refPts){
+  for(const seg of refSegs)for(const p of seg){
     const [bx,by]=latLng2cell(p.lat,p.lng).split(',').map(Number);
     for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)cells.add(`${bx+dx},${by+dy}`);
   }
@@ -367,44 +410,48 @@ function initMap(t){
   if(leafMap){leafMap.remove();leafMap=null}
   leafMap=L.map('map',{zoomControl:true});
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap'}).addTo(leafMap);
-  const refPts=t.refPts;
-  const allTrackPts=t.tracks.flatMap(x=>x.pts);
+  const refSegs=t.refPts;
+  const allTrackSegs=t.tracks.flatMap(x=>x.pts);
 
-  // Layer 1 — ref baseline (grey)
-  L.polyline(refPts.map(p=>[p.lat,p.lng]),{color:'#374151',weight:5}).addTo(leafMap);
+  // Layer 1 — ref baseline (grey), one polyline per segment so GPS gaps aren't bridged
+  for(const seg of refSegs)L.polyline(seg.map(p=>[p.lat,p.lng]),{color:'#374151',weight:5}).addTo(leafMap);
 
-  if(allTrackPts.length){
-    const visitedCells=buildVisitedCells(allTrackPts);
-    const refCells=buildRefCells(refPts);
+  if(allTrackSegs.length){
+    const visitedCells=buildVisitedCells(allTrackSegs);
+    const refCells=buildRefCells(refSegs);
 
     // Layer 2 — ref segments: green=covered, grey=not yet
-    let seg=[],lastCovered=null;
-    for(let i=0;i<refPts.length;i++){
-      const mid=i>0?{lat:(refPts[i-1].lat+refPts[i].lat)/2,lng:(refPts[i-1].lng+refPts[i].lng)/2}:refPts[i];
-      const covered=visitedCells.has(latLng2cell(mid.lat,mid.lng));
-      if(i===0){seg.push([refPts[i].lat,refPts[i].lng]);lastCovered=covered;continue}
-      if(covered!==lastCovered){
-        seg.push([refPts[i].lat,refPts[i].lng]);
-        flushSeg(leafMap,seg,lastCovered?'#4ade80':'#4b5563',lastCovered?5:3);
-        seg=[[refPts[i].lat,refPts[i].lng]];lastCovered=covered;
-      } else {seg.push([refPts[i].lat,refPts[i].lng])}
+    for(const refSeg of refSegs){
+      let seg=[],lastCovered=null;
+      for(let i=0;i<refSeg.length;i++){
+        const mid=i>0?{lat:(refSeg[i-1].lat+refSeg[i].lat)/2,lng:(refSeg[i-1].lng+refSeg[i].lng)/2}:refSeg[i];
+        const covered=visitedCells.has(latLng2cell(mid.lat,mid.lng));
+        if(i===0){seg.push([refSeg[i].lat,refSeg[i].lng]);lastCovered=covered;continue}
+        if(covered!==lastCovered){
+          seg.push([refSeg[i].lat,refSeg[i].lng]);
+          flushSeg(leafMap,seg,lastCovered?'#4ade80':'#4b5563',lastCovered?5:3);
+          seg=[[refSeg[i].lat,refSeg[i].lng]];lastCovered=covered;
+        } else {seg.push([refSeg[i].lat,refSeg[i].lng])}
+      }
+      flushSeg(leafMap,seg,lastCovered?'#4ade80':'#4b5563',lastCovered?5:3);
     }
-    flushSeg(leafMap,seg,lastCovered?'#4ade80':'#4b5563',lastCovered?5:3);
 
     // Layer 3 — raw track pts: red=hors-sentier, colored=near ref
     t.tracks.forEach((tr,ti)=>{
-      let tseg=[],tlast=null;
-      for(let i=0;i<tr.pts.length;i++){
-        const p=tr.pts[i];
-        const onRef=refCells.has(latLng2cell(p.lat,p.lng));
-        if(i===0){tseg.push([p.lat,p.lng]);tlast=onRef;continue}
-        if(onRef!==tlast){
-          tseg.push([p.lat,p.lng]);
-          flushSeg(leafMap,tseg,tlast?COLORS[ti%COLORS.length]:'#ef4444',tlast?2:2);
-          tseg=[[p.lat,p.lng]];tlast=onRef;
-        } else {tseg.push([p.lat,p.lng])}
-      }
-      flushSeg(leafMap,tseg,tlast?COLORS[ti%COLORS.length]:'#ef4444',2);
+      tr.pts.forEach(trackSeg=>{
+        let tseg=[],tlast=null;
+        for(let i=0;i<trackSeg.length;i++){
+          const p=trackSeg[i];
+          const onRef=refCells.has(latLng2cell(p.lat,p.lng));
+          if(i===0){tseg.push([p.lat,p.lng]);tlast=onRef;continue}
+          if(onRef!==tlast){
+            tseg.push([p.lat,p.lng]);
+            flushSeg(leafMap,tseg,tlast?COLORS[ti%COLORS.length]:'#ef4444',2);
+            tseg=[[p.lat,p.lng]];tlast=onRef;
+          } else {tseg.push([p.lat,p.lng])}
+        }
+        flushSeg(leafMap,tseg,tlast?COLORS[ti%COLORS.length]:'#ef4444',2);
+      });
     });
   }
 
@@ -423,7 +470,7 @@ function initMap(t){
   };
   legend.addTo(leafMap);
 
-  const refLL=refPts.map(p=>[p.lat,p.lng]);
+  const refLL=refSegs.flat().map(p=>[p.lat,p.lng]);
   if(refLL.length)leafMap.fitBounds(L.latLngBounds(refLL),{padding:[20,20]});
 }
 function closeModal(){document.getElementById('trail-modal').classList.remove('show');if(leafMap){leafMap.remove();leafMap=null}}
@@ -441,9 +488,9 @@ function handleRefGPX(inp){
   const f=inp.files[0];if(!f)return;
   const r=new FileReader();
   r.onload=e=>{
-    const {pts}=parseGPX(e.target.result);
-    if(!pts.length){toast('GPX invalide');return}
-    pendingRef={pts,name:f.name.replace('.gpx','').replace(/_/g,' ')};
+    const {segs}=parseGPX(e.target.result);
+    if(!segs.length){toast('GPX invalide');return}
+    pendingRef={segs,name:f.name.replace('.gpx','').replace(/_/g,' ')};
     document.getElementById('ref-name').value=pendingRef.name;
     document.getElementById('ref-modal').classList.add('show');
   };r.readAsText(f);inp.value='';
@@ -451,7 +498,7 @@ function handleRefGPX(inp){
 function saveRef(){
   const name=document.getElementById('ref-name').value.trim()||'Sentier';
   const emoji=document.getElementById('ref-emoji').value||'🥾';
-  trails.push({id:Date.now().toString(),name,emoji,refPts:interpolate(pendingRef.pts),tracks:[]});
+  trails.push({id:Date.now().toString(),name,emoji,refPts:interpolate(pendingRef.segs),tracks:[]});
   save();exportData();closeRefModal();renderTrails();showPage('trails');toast('Sentier créé ✓')
 }
 function closeRefModal(){document.getElementById('ref-modal').classList.remove('show');pendingRef=null}
@@ -460,11 +507,11 @@ function handleTrackGPX(inp){
   const f=inp.files[0];if(!f)return;
   const r=new FileReader();
   r.onload=e=>{
-    const {pts,date}=parseGPX(e.target.result);
-    if(!pts.length){toast('GPX invalide');return}
-    pendingTrack={pts};
+    const {segs,date}=parseGPX(e.target.result);
+    if(!segs.length){toast('GPX invalide');return}
+    pendingTrack={segs};
     const sel=document.getElementById('track-trail-select');
-    sel.innerHTML=trails.map(t=>`<option value="${t.id}">${t.emoji||'🥾'} ${t.name}</option>`).join('');
+    sel.innerHTML=trails.map(t=>`<option value="${t.id}">${esc(t.emoji||'🥾')} ${esc(t.name)}</option>`).join('');
     if(currentTrailId)sel.value=currentTrailId;
     document.getElementById('track-date').value=date||new Date().toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'});
     document.getElementById('track-modal').classList.add('show');
@@ -475,7 +522,7 @@ function saveTrack(){
   const tid=document.getElementById('track-trail-select').value;
   const date=document.getElementById('track-date').value;
   const t=trails.find(x=>x.id===tid);
-  t.tracks.push({pts:pendingTrack.pts,date});
+  t.tracks.push({pts:pendingTrack.segs,date});
   save();exportData();closeTrackModal();renderTrails();showPage('trails');toast('Sortie ajoutée ✓')
 }
 function closeTrackModal(){document.getElementById('track-modal').classList.remove('show');pendingTrack=null}
@@ -492,16 +539,16 @@ function setupDrop(el,onFile){
   });
 }
 setupDrop(document.querySelector('label[for="file-ref"]'),(xml,name)=>{
-  const {pts}=parseGPX(xml);if(!pts.length){toast('GPX invalide');return}
-  pendingRef={pts,name:name.replace(/\.gpx$/i,'').replace(/_/g,' ')};
+  const {segs}=parseGPX(xml);if(!segs.length){toast('GPX invalide');return}
+  pendingRef={segs,name:name.replace(/\.gpx$/i,'').replace(/_/g,' ')};
   document.getElementById('ref-name').value=pendingRef.name;
   document.getElementById('ref-modal').classList.add('show');
 });
 setupDrop(document.querySelector('label[for="file-track"]'),(xml)=>{
-  const {pts,date}=parseGPX(xml);if(!pts.length){toast('GPX invalide');return}
-  pendingTrack={pts};
+  const {segs,date}=parseGPX(xml);if(!segs.length){toast('GPX invalide');return}
+  pendingTrack={segs};
   const sel=document.getElementById('track-trail-select');
-  sel.innerHTML=trails.map(t=>`<option value="${t.id}">${t.emoji||'🥾'} ${t.name}</option>`).join('');
+  sel.innerHTML=trails.map(t=>`<option value="${t.id}">${esc(t.emoji||'🥾')} ${esc(t.name)}</option>`).join('');
   if(currentTrailId)sel.value=currentTrailId;
   document.getElementById('track-date').value=date||new Date().toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'});
   document.getElementById('track-modal').classList.add('show');
