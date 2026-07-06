@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a1f2e">
+<title>TrailMark</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#1a1f2e;--bg2:#242938;--bg3:#2e3347;--green:#4ade80;--orange:#fb923c;--text:#e2e8f0;--muted:#64748b;--radius:12px}
+body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;min-height:100vh;overflow-x:hidden}
+header{display:flex;align-items:center;gap:12px;padding:16px 20px;background:var(--bg2);border-bottom:1px solid var(--bg3);position:sticky;top:0;z-index:1000}
+.logo{width:32px;height:32px;position:relative}
+.logo svg{width:32px;height:32px}
+h1{font-size:1.2rem;font-weight:700;letter-spacing:.5px;color:var(--green)}
+h1 span{color:var(--orange);font-weight:400}
+nav{display:flex;gap:4px;margin-left:auto}
+nav button{background:transparent;border:none;color:var(--muted);padding:6px 12px;border-radius:8px;cursor:pointer;font-size:.8rem;transition:.2s}
+nav button.active{background:var(--bg3);color:var(--green)}
+main{padding:16px 20px;max-width:480px;margin:0 auto}
+.page{display:none}.page.active{display:block}
+
+/* Trail card */
+.trail-card{background:var(--bg2);border-radius:var(--radius);padding:16px;margin-bottom:12px;border:1px solid var(--bg3);cursor:pointer;transition:.2s}
+.trail-card:hover{border-color:var(--green)}
+.trail-card-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.trail-icon{width:40px;height:40px;background:var(--bg3);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0}
+.trail-name{font-weight:600;font-size:.95rem}
+.trail-meta{font-size:.75rem;color:var(--muted);margin-top:2px}
+.progress-ring-wrap{position:relative;margin-left:auto;flex-shrink:0}
+.progress-ring-wrap svg{transform:rotate(-90deg)}
+.progress-ring-val{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;color:var(--green)}
+.bar-track{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-top:4px}
+.bar-fill{height:100%;background:linear-gradient(90deg,var(--green),#86efac);border-radius:2px;transition:width .6s ease}
+.stats-row{display:flex;gap:8px;margin-top:10px}
+.stat{flex:1;background:var(--bg3);border-radius:8px;padding:8px;text-align:center}
+.stat-val{font-size:.9rem;font-weight:700;color:var(--orange)}
+.stat-lbl{font-size:.65rem;color:var(--muted);margin-top:2px}
+
+/* Map */
+#map{height:300px;border-radius:var(--radius);margin-bottom:16px;border:1px solid var(--bg3);overflow:hidden}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;border:none;cursor:pointer;font-size:.85rem;font-weight:600;transition:.2s}
+.btn-primary{background:var(--green);color:#0f172a}
+.btn-primary:hover{background:#86efac}
+.btn-ghost{background:var(--bg3);color:var(--text)}
+.btn-ghost:hover{background:#374151}
+.btn-danger{background:#ef4444;color:#fff}
+.btn-sm{padding:6px 12px;font-size:.75rem}
+.btn-block{width:100%;justify-content:center}
+
+/* Drop zone */
+.dropzone{display:block;border:2px dashed var(--bg3);border-radius:var(--radius);padding:32px 20px;text-align:center;cursor:pointer;transition:.2s;background:var(--bg2);width:100%;position:relative}
+.dropzone:hover,.dropzone.drag{border-color:var(--green);background:rgba(74,222,128,.05)}
+.dropzone-icon{font-size:2.5rem;margin-bottom:8px;display:block}
+.dropzone p{color:var(--muted);font-size:.85rem}
+.dropzone strong{color:var(--text);display:block;margin-bottom:4px}
+.dropzone input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:0}
+
+/* Modal */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:2000;display:none;align-items:flex-end;justify-content:center}
+.overlay.show{display:flex}
+.modal{background:var(--bg2);border-radius:16px 16px 0 0;padding:20px;width:100%;max-width:480px;max-height:85vh;overflow-y:auto}
+.modal-title{font-weight:700;font-size:1rem;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between}
+.close-btn{background:var(--bg3);border:none;color:var(--text);width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:1rem;display:flex;align-items:center;justify-content:center}
+label.field-lbl{display:block;font-size:.8rem;color:var(--muted);margin-bottom:6px;margin-top:12px}
+input[type=text],select{width:100%;background:var(--bg3);border:1px solid #374151;border-radius:8px;padding:10px 12px;color:var(--text);font-size:.85rem;outline:none}
+input[type=text]:focus,select:focus{border-color:var(--green)}
+select option{background:var(--bg2)}
+
+/* Chips */
+.chip{display:inline-flex;align-items:center;gap:4px;background:var(--bg3);border-radius:20px;padding:4px 10px;font-size:.75rem;margin:3px}
+.chip .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+/* Toast */
+.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#0f172a;border:1px solid var(--green);color:var(--green);padding:10px 20px;border-radius:100px;font-size:.8rem;z-index:3000;opacity:0;transition:.3s;pointer-events:none}
+.toast.show{opacity:1}
+
+/* Empty state */
+.empty{text-align:center;padding:48px 20px;color:var(--muted)}
+.empty-icon{font-size:3rem;margin-bottom:12px;opacity:.5}
+.empty p{font-size:.9rem;line-height:1.6}
+
+/* Track list */
+.track-list{margin-top:8px}
+.track-item{display:flex;align-items:center;gap:8px;padding:8px;background:var(--bg3);border-radius:8px;margin-bottom:6px;font-size:.8rem}
+.track-item .del{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem;padding:2px 6px}
+.track-item .del:hover{color:#ef4444}
+
+.section-title{font-size:.75rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin:20px 0 10px}
+.divider{height:1px;background:var(--bg3);margin:16px 0}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 32 32" fill="none">
+      <path d="M4 24 L10 14 L16 18 L22 8 L28 16" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="22" cy="8" r="3" fill="#fb923c"/>
+    </svg>
+  </div>
+  <h1>Trail<span>Mark</span></h1>
+  <nav>
+    <button class="active" onclick="showPage('trails')">Sentiers</button>
+    <button onclick="showPage('import')">+ Import</button>
+    <button onclick="exportData()" title="Sauvegarder">💾</button>
+    <label title="Restaurer" style="display:inline-flex;align-items:center;padding:6px 12px;border-radius:8px;cursor:pointer;font-size:.8rem;color:var(--muted);transition:.2s" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">📂<input type="file" accept=".json" onchange="importData(this)" style="display:none"></label>
+  </nav>
+</header>
+
+<main>
+  <div id="page-trails" class="page active">
+    <div id="trails-list"></div>
+  </div>
+
+  <div id="page-import" class="page">
+    <p class="section-title">Ajouter un sentier de référence</p>
+    <label class="dropzone">
+      <span class="dropzone-icon">🗺️</span>
+      <strong>Tracé complet du sentier</strong>
+      <p>Appuyez pour choisir un fichier GPX</p>
+      <input type="file" id="file-ref" accept=".gpx,.xml" onchange="handleRefGPX(this)">
+    </label>
+
+    <div class="divider"></div>
+    <p class="section-title">Ajouter une sortie effectuée</p>
+    <label class="dropzone">
+      <span class="dropzone-icon">🥾</span>
+      <strong>Ma trace GPS</strong>
+      <p>Appuyez pour choisir un fichier GPX</p>
+      <input type="file" id="file-track" accept=".gpx,.xml" onchange="handleTrackGPX(this)">
+    </label>
+  </div>
+</main>
+
+<!-- Modal détail sentier -->
+<div class="overlay" id="trail-modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-title">
+      <span id="modal-name">Sentier</span>
+      <button class="close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <div id="map"></div>
+    <div id="modal-stats"></div>
+    <div id="modal-tracks"></div>
+    <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" onclick="addTrackToModal()">+ Ajouter une sortie</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteCurrentTrail()">Supprimer le sentier</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal référence GPX -->
+<div class="overlay" id="ref-modal" onclick="if(event.target===this)closeRefModal()">
+  <div class="modal">
+    <div class="modal-title">
+      <span>Nouveau sentier</span>
+      <button class="close-btn" onclick="closeRefModal()">✕</button>
+    </div>
+    <label class="field-lbl">Nom du sentier</label>
+    <input type="text" id="ref-name" placeholder="ex: GR20 Nord">
+    <label class="field-lbl">Emoji (optionnel)</label>
+    <input type="text" id="ref-emoji" placeholder="🏔️" maxlength="2" style="width:80px">
+    <div style="margin-top:16px;display:flex;gap:8px">
+      <button class="btn btn-primary btn-block" onclick="saveRef()">Créer le sentier</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal ajout trace -->
+<div class="overlay" id="track-modal" onclick="if(event.target===this)closeTrackModal()">
+  <div class="modal">
+    <div class="modal-title">
+      <span>Ajouter une sortie</span>
+      <button class="close-btn" onclick="closeTrackModal()">✕</button>
+    </div>
+    <label class="field-lbl">Associer au sentier</label>
+    <select id="track-trail-select"></select>
+    <label class="field-lbl">Date (optionnel)</label>
+    <input type="text" id="track-date" placeholder="ex: 15 juin 2025">
+    <div style="margin-top:16px;display:flex;gap:8px">
+      <button class="btn btn-primary btn-block" onclick="saveTrack()">Ajouter la sortie</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+let trails=JSON.parse(localStorage.getItem('tm_trails')||'[]');
+let pendingRef=null,pendingTrack=null,currentTrailId=null,leafMap=null;
+
+// ─── GPX Parser ──────────────────────────────────────────────────────────────
+function parseGPX(xml){
+  const doc=new DOMParser().parseFromString(xml,'text/xml');
+  const pts=[...doc.querySelectorAll('trkpt,rtept,wpt')].map(p=>({
+    lat:+p.getAttribute('lat'),lng:+p.getAttribute('lon')
+  }));
+  const timeEl=doc.querySelector('metadata > time')||doc.querySelector('trkpt > time,rtept > time,wpt > time');
+  const date=timeEl?new Date(timeEl.textContent).toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'}):null;
+  return {pts,date};
+}
+
+// ─── Geo Utils ───────────────────────────────────────────────────────────────
+const R=6371000;
+function haversine(a,b){
+  const dLat=(b.lat-a.lat)*Math.PI/180,dLng=(b.lng-a.lng)*Math.PI/180;
+  const s=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));
+}
+function totalDist(pts){
+  let d=0;for(let i=1;i<pts.length;i++)d+=haversine(pts[i-1],pts[i]);
+  return d;
+}
+
+// ─── Spatial Grid Dedup (20m) ─────────────────────────────────────────────────
+const CELL=20; // metres
+// Densify a polyline so no segment exceeds `step` metres
+function interpolate(pts,step=15){
+  if(pts.length<2)return pts;
+  const out=[pts[0]];
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1],b=pts[i];
+    const d=haversine(a,b);
+    if(d>step){
+      const n=Math.ceil(d/step);
+      for(let j=1;j<n;j++){
+        const t=j/n;
+        out.push({lat:a.lat+(b.lat-a.lat)*t,lng:a.lng+(b.lng-a.lng)*t});
+      }
+    }
+    out.push(b);
+  }
+  return out;
+}
+function latLng2cell(lat,lng){
+  const cy=Math.floor(lat*R*Math.PI/180/CELL);
+  const cx=Math.floor(lng*R*Math.PI/180*Math.cos(lat*Math.PI/180)/CELL);
+  return `${cx},${cy}`;
+}
+function dedupDistance(trackPts,refPts){
+  const refCells=new Set();
+  for(const p of refPts){
+    const [bx,by]=latLng2cell(p.lat,p.lng).split(',').map(Number);
+    for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)refCells.add(`${bx+dx},${by+dy}`);
+  }
+  const visited=new Set();
+  for(const p of trackPts){
+    const k=latLng2cell(p.lat,p.lng);
+    if(refCells.has(k))visited.add(k);
+  }
+  let d=0;
+  for(let i=1;i<refPts.length;i++){
+    const ka=latLng2cell(refPts[i-1].lat,refPts[i-1].lng);
+    const kb=latLng2cell(refPts[i].lat,refPts[i].lng);
+    if(visited.has(ka)||visited.has(kb))d+=haversine(refPts[i-1],refPts[i]);
+  }
+  return d;
+}
+function computeCoverage(trail){
+  const refPts=trail.refPts;
+  // Merge all track points
+  const allTrackPts=trail.tracks.flatMap(t=>t.pts);
+  if(!allTrackPts.length)return 0;
+  const covered=dedupDistance(allTrackPts,refPts);
+  const total=totalDist(refPts);
+  return total>0?Math.min(100,covered/total*100):0;
+}
+
+// ─── Storage ──────────────────────────────────────────────────────────────────
+function save(){localStorage.setItem('tm_trails',JSON.stringify(trails))}
+function exportData(){
+  const blob=new Blob([JSON.stringify({v:1,trails},null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`trailmark_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();URL.revokeObjectURL(a.href);
+  toast('Sauvegarde téléchargée ✓');
+}
+function importData(inp){
+  const f=inp.files[0];if(!f)return;
+  const r=new FileReader();
+  r.onload=e=>{
+    try{
+      const d=JSON.parse(e.target.result);
+      if(!d.trails||!Array.isArray(d.trails))throw new Error();
+      if(!confirm(`Importer ${d.trails.length} sentier(s) ? Les données actuelles seront remplacées.`))return;
+      trails=d.trails;save();renderTrails();showPage('trails');toast(`${trails.length} sentier(s) importé(s) ✓`);
+    }catch{toast('Fichier invalide');}
+  };
+  r.readAsText(f);inp.value='';
+}
+
+// ─── UI Utils ─────────────────────────────────────────────────────────────────
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200)}
+function showPage(p){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById('page-'+p).classList.add('active');document.querySelectorAll('nav button').forEach((b,i)=>b.classList.toggle('active',i===(p==='trails'?0:1)))}
+function fmt(m){return m>=1000?(m/1000).toFixed(1)+'km':Math.round(m)+'m'}
+function progressRing(pct,r=22){
+  const c=2*Math.PI*r,dash=c*pct/100,col=pct>=80?'#4ade80':pct>=40?'#fb923c':'#64748b';
+  return`<div class="progress-ring-wrap"><svg width="${r*2+8}" height="${r*2+8}" viewBox="0 0 ${r*2+8} ${r*2+8}"><circle cx="${r+4}" cy="${r+4}" r="${r}" fill="none" stroke="#2e3347" stroke-width="4"/><circle cx="${r+4}" cy="${r+4}" r="${r}" fill="none" stroke="${col}" stroke-width="4" stroke-dasharray="${dash} ${c}" stroke-linecap="round"/></svg><div class="progress-ring-val">${Math.round(pct)}%</div></div>`;
+}
+
+// ─── Render Trails ────────────────────────────────────────────────────────────
+function renderTrails(){
+  const el=document.getElementById('trails-list');
+  if(!trails.length){el.innerHTML=`<div class="empty"><div class="empty-icon">🏔️</div><p>Aucun sentier encore.<br>Commencez par importer un tracé GPX.</p><button class="btn btn-primary" style="margin-top:16px" onclick="showPage('import')">Importer un GPX</button></div>`;return}
+  el.innerHTML=trails.map(t=>{
+    const pct=computeCoverage(t),dist=totalDist(t.refPts),cov=dist*pct/100;
+    return`<div class="trail-card" onclick="openTrail('${t.id}')">
+      <div class="trail-card-header">
+        <div class="trail-icon">${t.emoji||'🥾'}</div>
+        <div><div class="trail-name">${t.name}</div><div class="trail-meta">${fmt(dist)} total · ${t.tracks.length} sortie${t.tracks.length>1?'s':''}</div></div>
+        ${progressRing(pct)}
+      </div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+      <div class="stats-row">
+        <div class="stat"><div class="stat-val">${fmt(cov)}</div><div class="stat-lbl">Parcouru</div></div>
+        <div class="stat"><div class="stat-val">${fmt(dist-cov)}</div><div class="stat-lbl">Restant</div></div>
+        <div class="stat"><div class="stat-val">${Math.round(pct)}%</div><div class="stat-lbl">Complété</div></div>
+      </div>
+    </div>`
+  }).join('');
+}
+
+// ─── Trail Modal ──────────────────────────────────────────────────────────────
+const COLORS=['#4ade80','#fb923c','#60a5fa','#f472b6','#a78bfa','#34d399'];
+function openTrail(id){
+  currentTrailId=id;
+  const t=trails.find(x=>x.id===id);
+  document.getElementById('modal-name').textContent=`${t.emoji||'🥾'} ${t.name}`;
+  document.getElementById('trail-modal').classList.add('show');
+  const pct=computeCoverage(t),dist=totalDist(t.refPts),cov=dist*pct/100;
+  document.getElementById('modal-stats').innerHTML=`
+    <div class="stats-row" style="margin-top:12px">
+      <div class="stat"><div class="stat-val">${fmt(dist)}</div><div class="stat-lbl">Total</div></div>
+      <div class="stat"><div class="stat-val">${fmt(cov)}</div><div class="stat-lbl">Parcouru</div></div>
+      <div class="stat"><div class="stat-val">${Math.round(pct)}%</div><div class="stat-lbl">Complété</div></div>
+    </div>`;
+  document.getElementById('modal-tracks').innerHTML=`<p class="section-title">Sorties (${t.tracks.length})</p><div class="track-list">${
+    t.tracks.map((tr,i)=>`<div class="track-item"><div class="dot" style="width:10px;height:10px;border-radius:50%;background:${COLORS[i%COLORS.length]};flex-shrink:0"></div>${tr.date||'Sortie '+(i+1)} · ${fmt(totalDist(tr.pts))}<button class="del" onclick="delTrack('${id}',${i})">✕</button></div>`).join('')
+  }</div>`;
+  setTimeout(()=>initMap(t),100);
+}
+function buildVisitedCells(trackPts){
+  const visited=new Set();
+  for(const p of trackPts){
+    const [bx,by]=latLng2cell(p.lat,p.lng).split(',').map(Number);
+    for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)visited.add(`${bx+dx},${by+dy}`);
+  }
+  return visited;
+}
+function buildRefCells(refPts){
+  const cells=new Set();
+  for(const p of refPts){
+    const [bx,by]=latLng2cell(p.lat,p.lng).split(',').map(Number);
+    for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)cells.add(`${bx+dx},${by+dy}`);
+  }
+  return cells;
+}
+function flushSeg(map,seg,color,w){if(seg.length>1)L.polyline(seg,{color,weight:w,lineCap:'round',lineJoin:'round'}).addTo(map)}
+function initMap(t){
+  if(leafMap){leafMap.remove();leafMap=null}
+  leafMap=L.map('map',{zoomControl:true});
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap'}).addTo(leafMap);
+  const refPts=t.refPts;
+  const allTrackPts=t.tracks.flatMap(x=>x.pts);
+
+  // Layer 1 — ref baseline (grey)
+  L.polyline(refPts.map(p=>[p.lat,p.lng]),{color:'#374151',weight:5}).addTo(leafMap);
+
+  if(allTrackPts.length){
+    const visitedCells=buildVisitedCells(allTrackPts);
+    const refCells=buildRefCells(refPts);
+
+    // Layer 2 — ref segments: green=covered, grey=not yet
+    let seg=[],lastCovered=null;
+    for(let i=0;i<refPts.length;i++){
+      const mid=i>0?{lat:(refPts[i-1].lat+refPts[i].lat)/2,lng:(refPts[i-1].lng+refPts[i].lng)/2}:refPts[i];
+      const covered=visitedCells.has(latLng2cell(mid.lat,mid.lng));
+      if(i===0){seg.push([refPts[i].lat,refPts[i].lng]);lastCovered=covered;continue}
+      if(covered!==lastCovered){
+        seg.push([refPts[i].lat,refPts[i].lng]);
+        flushSeg(leafMap,seg,lastCovered?'#4ade80':'#4b5563',lastCovered?5:3);
+        seg=[[refPts[i].lat,refPts[i].lng]];lastCovered=covered;
+      } else {seg.push([refPts[i].lat,refPts[i].lng])}
+    }
+    flushSeg(leafMap,seg,lastCovered?'#4ade80':'#4b5563',lastCovered?5:3);
+
+    // Layer 3 — raw track pts: red=hors-sentier, colored=near ref
+    t.tracks.forEach((tr,ti)=>{
+      let tseg=[],tlast=null;
+      for(let i=0;i<tr.pts.length;i++){
+        const p=tr.pts[i];
+        const onRef=refCells.has(latLng2cell(p.lat,p.lng));
+        if(i===0){tseg.push([p.lat,p.lng]);tlast=onRef;continue}
+        if(onRef!==tlast){
+          tseg.push([p.lat,p.lng]);
+          flushSeg(leafMap,tseg,tlast?COLORS[ti%COLORS.length]:'#ef4444',tlast?2:2);
+          tseg=[[p.lat,p.lng]];tlast=onRef;
+        } else {tseg.push([p.lat,p.lng])}
+      }
+      flushSeg(leafMap,tseg,tlast?COLORS[ti%COLORS.length]:'#ef4444',2);
+    });
+  }
+
+  // Legend
+  const legend=L.control({position:'bottomleft'});
+  legend.onAdd=()=>{
+    const d=L.DomUtil.create('div');
+    d.style.cssText='background:rgba(26,31,46,.9);padding:8px 10px;border-radius:8px;font-size:11px;color:#e2e8f0;line-height:1.8;border:1px solid #2e3347';
+    d.innerHTML=[
+      '<span style="color:#4ade80">━━</span> Parcouru',
+      '<span style="color:#4b5563">━━</span> Reste à faire',
+      '<span style="color:#60a5fa">━━</span> Trace GPS (sur sentier)',
+      '<span style="color:#ef4444">━━</span> Trace GPS (hors sentier)'
+    ].join('<br>');
+    return d;
+  };
+  legend.addTo(leafMap);
+
+  const refLL=refPts.map(p=>[p.lat,p.lng]);
+  if(refLL.length)leafMap.fitBounds(L.latLngBounds(refLL),{padding:[20,20]});
+}
+function closeModal(){document.getElementById('trail-modal').classList.remove('show');if(leafMap){leafMap.remove();leafMap=null}}
+function delTrack(id,idx){
+  const t=trails.find(x=>x.id===id);t.tracks.splice(idx,1);save();openTrail(id);renderTrails();toast('Sortie supprimée')
+}
+function deleteCurrentTrail(){
+  if(!confirm('Supprimer ce sentier et toutes ses sorties ?'))return;
+  trails=trails.filter(x=>x.id!==currentTrailId);save();closeModal();renderTrails();toast('Sentier supprimé')
+}
+function addTrackToModal(){closeModal();showPage('import');setTimeout(()=>document.getElementById('dz-track').scrollIntoView({behavior:'smooth'}),100)}
+
+// ─── Import Handlers ──────────────────────────────────────────────────────────
+function handleRefGPX(inp){
+  const f=inp.files[0];if(!f)return;
+  const r=new FileReader();
+  r.onload=e=>{
+    const {pts}=parseGPX(e.target.result);
+    if(!pts.length){toast('GPX invalide');return}
+    pendingRef={pts,name:f.name.replace('.gpx','').replace(/_/g,' ')};
+    document.getElementById('ref-name').value=pendingRef.name;
+    document.getElementById('ref-modal').classList.add('show');
+  };r.readAsText(f);inp.value='';
+}
+function saveRef(){
+  const name=document.getElementById('ref-name').value.trim()||'Sentier';
+  const emoji=document.getElementById('ref-emoji').value||'🥾';
+  trails.push({id:Date.now().toString(),name,emoji,refPts:interpolate(pendingRef.pts),tracks:[]});
+  save();exportData();closeRefModal();renderTrails();showPage('trails');toast('Sentier créé ✓')
+}
+function closeRefModal(){document.getElementById('ref-modal').classList.remove('show');pendingRef=null}
+
+function handleTrackGPX(inp){
+  const f=inp.files[0];if(!f)return;
+  const r=new FileReader();
+  r.onload=e=>{
+    const {pts,date}=parseGPX(e.target.result);
+    if(!pts.length){toast('GPX invalide');return}
+    pendingTrack={pts};
+    const sel=document.getElementById('track-trail-select');
+    sel.innerHTML=trails.map(t=>`<option value="${t.id}">${t.emoji||'🥾'} ${t.name}</option>`).join('');
+    if(currentTrailId)sel.value=currentTrailId;
+    document.getElementById('track-date').value=date||new Date().toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'});
+    document.getElementById('track-modal').classList.add('show');
+  };r.readAsText(f);inp.value='';
+}
+function saveTrack(){
+  if(!trails.length){toast('Créez d\'abord un sentier');return}
+  const tid=document.getElementById('track-trail-select').value;
+  const date=document.getElementById('track-date').value;
+  const t=trails.find(x=>x.id===tid);
+  t.tracks.push({pts:pendingTrack.pts,date});
+  save();exportData();closeTrackModal();renderTrails();showPage('trails');toast('Sortie ajoutée ✓')
+}
+function closeTrackModal(){document.getElementById('track-modal').classList.remove('show');pendingTrack=null}
+
+// ─── Drag & Drop (desktop only, labels already handle mobile) ────────────────
+function setupDrop(el,onFile){
+  if(!el)return;
+  el.addEventListener('dragover',e=>{e.preventDefault();el.classList.add('drag')});
+  el.addEventListener('dragleave',()=>el.classList.remove('drag'));
+  el.addEventListener('drop',e=>{
+    e.preventDefault();el.classList.remove('drag');
+    const f=e.dataTransfer.files[0];
+    if(f){const r=new FileReader();r.onload=x=>onFile(x.target.result,f.name);r.readAsText(f)}
+  });
+}
+setupDrop(document.querySelector('label[for="file-ref"]'),(xml,name)=>{
+  const {pts}=parseGPX(xml);if(!pts.length){toast('GPX invalide');return}
+  pendingRef={pts,name:name.replace(/\.gpx$/i,'').replace(/_/g,' ')};
+  document.getElementById('ref-name').value=pendingRef.name;
+  document.getElementById('ref-modal').classList.add('show');
+});
+setupDrop(document.querySelector('label[for="file-track"]'),(xml)=>{
+  const {pts,date}=parseGPX(xml);if(!pts.length){toast('GPX invalide');return}
+  pendingTrack={pts};
+  const sel=document.getElementById('track-trail-select');
+  sel.innerHTML=trails.map(t=>`<option value="${t.id}">${t.emoji||'🥾'} ${t.name}</option>`).join('');
+  if(currentTrailId)sel.value=currentTrailId;
+  document.getElementById('track-date').value=date||new Date().toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'});
+  document.getElementById('track-modal').classList.add('show');
+});
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+renderTrails();
+</script>
+</body>
+</html>
